@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Obsidian Viewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<style>
+  :root {
+    --bg-primary: #1e1e1e;
+    --bg-secondary: #252526;
+    --bg-sidebar: #1c1c1c;
+    --bg-hover: #2a2d2e;
+    --text-primary: #d4d4d4;
+    --text-muted: #858585;
+    --accent: #7c6af5;
+    --accent-hover: #9d8ef7;
+    --border: #3c3c3c;
+    --link: #6fa8dc;
+    --tag-bg: #2d3748;
+    --tag-text: #90cdf4;
+
+    --callout-note-bg: #1a2a3a;
+    --callout-note-border: #4a90d9;
+    --callout-note-icon: "📝";
+    --callout-info-bg: #1a2a3a;
+    --callout-info-border: #4a90d9;
+    --callout-tip-bg: #1a3a2a;
+    --callout-tip-border: #4aad72;
+    --callout-success-bg: #1a3a2a;
+    --callout-success-border: #4aad72;
+    --callout-warning-bg: #3a2a1a;
+    --callout-warning-border: #d9944a;
+    --callout-danger-bg: #3a1a1a;
+    --callout-danger-border: #d94a4a;
+    --callout-question-bg: #2a1a3a;
+    --callout-question-border: #9a4ad9;
+    --callout-quote-bg: #2a2a2a;
+    --callout-quote-border: #888888;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ===== TOP BAR ===== */
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  #topbar h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  #search-input {
+    flex: 1;
+    min-width: 150px;
+    padding: 5px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+  }
+  #search-input:focus { border-color: var(--accent); }
+
+  #btn-login, #btn-logout, #btn-back {
+    padding: 5px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  #btn-login { background: var(--accent); color: #fff; }
+  #btn-login:hover { background: var(--accent-hover); }
+  #btn-logout { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+  #btn-logout:hover { background: var(--bg-hover); }
+  #btn-back { background: transparent; border: 1px solid var(--border); color: var(--text-primary); display: none; }
+  #btn-back:hover { background: var(--bg-hover); }
+  #user-info { font-size: 12px; color: var(--text-muted); }
+
+  /* ===== MAIN LAYOUT ===== */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ===== SIDEBAR ===== */
+  #sidebar {
+    width: 260px;
+    min-width: 260px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  #breadcrumb {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    word-break: break-all;
+  }
+  #file-list { flex: 1; overflow-y: auto; }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-primary);
+    border-bottom: 1px solid transparent;
+    transition: background 0.1s;
+    user-select: none;
+  }
+  .file-item:hover { background: var(--bg-hover); }
+  .file-item.active { background: var(--bg-hover); color: var(--accent); }
+  .file-item .icon { font-size: 15px; flex-shrink: 0; }
+  .file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .file-item.folder .name { font-weight: 500; }
+
+  /* ===== CONTENT AREA ===== */
+  #content-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 48px;
+  }
+
+  /* ===== WELCOME / LOADING ===== */
+  #welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 16px;
+    color: var(--text-muted);
+  }
+  #welcome .logo { font-size: 48px; }
+  #welcome h2 { font-size: 20px; color: var(--text-primary); }
+  #welcome p { font-size: 14px; text-align: center; max-width: 300px; line-height: 1.6; }
+
+  #loading {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    font-size: 14px;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ===== MARKDOWN STYLES ===== */
+  #md-content { max-width: 800px; margin: 0 auto; line-height: 1.7; }
+
+  #md-content h1, #md-content h2, #md-content h3,
+  #md-content h4, #md-content h5, #md-content h6 {
+    margin: 1.5em 0 0.5em;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  #md-content h1 { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  #md-content h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.2em; }
+  #md-content h3 { font-size: 1.25em; }
+  #md-content h4 { font-size: 1.1em; }
+
+  #md-content p { margin: 0.8em 0; }
+  #md-content ul, #md-content ol { margin: 0.8em 0; padding-left: 1.8em; }
+  #md-content li { margin: 0.3em 0; }
+  #md-content li > ul, #md-content li > ol { margin: 0.2em 0; }
+
+  #md-content blockquote {
+    border-left: 3px solid var(--border);
+    padding: 0.5em 1em;
+    margin: 1em 0;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    border-radius: 0 4px 4px 0;
+  }
+
+  #md-content pre {
+    background: #1a1a2e;
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    margin: 1em 0;
+  }
+  #md-content code {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.9em;
+    background: rgba(255,255,255,0.08);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  #md-content pre code {
+    background: transparent;
+    padding: 0;
+    font-size: 0.88em;
+  }
+
+  #md-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.95em;
+  }
+  #md-content th, #md-content td {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    text-align: left;
+  }
+  #md-content th { background: var(--bg-secondary); font-weight: 600; }
+  #md-content tr:hover { background: var(--bg-hover); }
+
+  #md-content hr { border: none; border-top: 1px solid var(--border); margin: 2em 0; }
+
+  #md-content img { max-width: 100%; border-radius: 6px; margin: 0.5em 0; }
+
+  #md-content a { color: var(--link); text-decoration: none; }
+  #md-content a:hover { text-decoration: underline; }
+
+  /* WikiLink */
+  .wiki-link {
+    color: var(--accent);
+    cursor: pointer;
+    border-bottom: 1px dashed var(--accent);
+    text-decoration: none;
+  }
+  .wiki-link:hover { color: var(--accent-hover); }
+
+  /* Tags */
+  .ob-tag {
+    display: inline-block;
+    background: var(--tag-bg);
+    color: var(--tag-text);
+    padding: 1px 8px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    cursor: pointer;
+    text-decoration: none;
+    margin: 0 2px;
+  }
+  .ob-tag:hover { background: var(--accent); color: #fff; }
+
+  /* ===== CALLOUTS ===== */
+  .callout {
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 1em 0;
+    border-left: 4px solid;
+  }
+  .callout-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 0.95em;
+    margin-bottom: 6px;
+  }
+  .callout-icon { font-size: 1.1em; }
+  .callout-body p:first-child { margin-top: 0; }
+  .callout-body p:last-child { margin-bottom: 0; }
+
+  .callout-note    { background: var(--callout-note-bg);    border-color: var(--callout-note-border);    }
+  .callout-info    { background: var(--callout-info-bg);    border-color: var(--callout-info-border);    }
+  .callout-tip     { background: var(--callout-tip-bg);     border-color: var(--callout-tip-border);     }
+  .callout-success { background: var(--callout-success-bg); border-color: var(--callout-success-border); }
+  .callout-warning { background: var(--callout-warning-bg); border-color: var(--callout-warning-border); }
+  .callout-danger  { background: var(--callout-danger-bg);  border-color: var(--callout-danger-border);  }
+  .callout-question{ background: var(--callout-question-bg);border-color: var(--callout-question-border);}
+  .callout-quote   { background: var(--callout-quote-bg);   border-color: var(--callout-quote-border);   }
+  .callout-abstract{ background: var(--callout-note-bg);    border-color: var(--callout-note-border);    }
+  .callout-todo    { background: var(--callout-tip-bg);     border-color: var(--callout-tip-border);     }
+  .callout-failure { background: var(--callout-danger-bg);  border-color: var(--callout-danger-border);  }
+  .callout-bug     { background: var(--callout-danger-bg);  border-color: var(--callout-danger-border);  }
+  .callout-example { background: var(--callout-question-bg);border-color: var(--callout-question-border);}
+
+  .callout-note-title    { color: var(--callout-note-border);    }
+  .callout-info-title    { color: var(--callout-info-border);    }
+  .callout-tip-title     { color: var(--callout-tip-border);     }
+  .callout-success-title { color: var(--callout-success-border); }
+  .callout-warning-title { color: var(--callout-warning-border); }
+  .callout-danger-title  { color: var(--callout-danger-border);  }
+  .callout-question-title{ color: var(--callout-question-border);}
+  .callout-quote-title   { color: var(--callout-quote-border);   }
+  .callout-abstract-title{ color: var(--callout-note-border);    }
+  .callout-todo-title    { color: var(--callout-tip-border);     }
+  .callout-failure-title { color: var(--callout-danger-border);  }
+  .callout-bug-title     { color: var(--callout-danger-border);  }
+  .callout-example-title { color: var(--callout-question-border);}
+
+  /* Checkbox */
+  #md-content input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 14px; height: 14px;
+    margin-right: 6px;
+    cursor: default;
+  }
+  li.task-list-item { list-style: none; margin-left: -1.5em; padding-left: 0.2em; }
+
+  /* ===== SEARCH RESULTS ===== */
+  #search-results {
+    display: none;
+    position: absolute;
+    top: 48px; left: 0; right: 0;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0 0 8px 8px;
+    z-index: 100;
+    max-height: 300px;
+    overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  }
+  .search-result-item {
+    padding: 10px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .search-result-item:hover { background: var(--bg-hover); }
+  .search-result-item .sr-name { color: var(--text-primary); font-weight: 500; }
+  .search-result-item .sr-path { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .search-result-item .sr-match { color: var(--text-muted); font-size: 12px; margin-top: 4px; font-style: italic; }
+
+  /* ===== MOBILE ===== */
+  @media (max-width: 640px) {
+    #sidebar {
+      position: fixed;
+      left: -260px;
+      top: 0; bottom: 0;
+      z-index: 200;
+      transition: left 0.2s;
+    }
+    #sidebar.open { left: 0; }
+    #content-area { padding: 20px 16px; }
+    #btn-menu { display: flex !important; }
+    #overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 199;
+    }
+    #overlay.show { display: block; }
+  }
+
+  #btn-menu {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 18px;
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ===== TOP BAR ===== -->
+<div id="topbar">
+  <button id="btn-menu" onclick="toggleSidebar()">☰</button>
+  <h1>📓 Obsidian Viewer</h1>
+  <div style="position:relative;flex:1;min-width:150px;">
+    <input id="search-input" type="text" placeholder="ノートを検索..." oninput="onSearchInput(this.value)" autocomplete="off">
+    <div id="search-results"></div>
+  </div>
+  <button id="btn-back" onclick="goBack()">← 戻る</button>
+  <span id="user-info"></span>
+  <button id="btn-login" onclick="handleLogin()">Googleでログイン</button>
+  <button id="btn-logout" onclick="handleLogout()" style="display:none">ログアウト</button>
+</div>
+
+<div id="overlay" onclick="toggleSidebar()"></div>
+
+<!-- ===== MAIN ===== -->
+<div id="main">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div id="breadcrumb">📁 マイドライブ</div>
+    <div id="file-list">
+      <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">
+        Googleでログインしてください
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTENT -->
+  <div id="content-area">
+    <div id="loading">
+      <div class="spinner"></div>
+      <span>読み込み中...</span>
+    </div>
+    <div id="welcome">
+      <div class="logo">📓</div>
+      <h2>Obsidian Viewer</h2>
+      <p>Googleでログインして、Google Drive内のMarkdownノートを閲覧できます。</p>
+    </div>
+    <div id="md-content" style="display:none"></div>
+  </div>
+
+</div>
+
+<!-- ===== GOOGLE API ===== -->
+<script>
+// ==========================================
+// ⚙️ 設定: ここにGoogle Cloud のクライアントIDを入れる
+// ==========================================
+const CLIENT_ID = 'Y455215896385-8ae1qtobhhcf7pmm1g968udpkigat6kl.apps.googleusercontent.com';
+const API_KEY   = 'AIzaSyBtnRIbNn-u6X2UagegrWNlL0to_zHxSxM';
+// ==========================================
+
+const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
+const DISCOVERY_DOC = 'https://www.googleapis.com/discovery/v1/apis/drive/v3/rest';
+
+let tokenClient;
+let gapiInited = false;
+let gisInited  = false;
+let accessToken = null;
+
+// ファイルキャッシュ (全ファイル一覧、検索用)
+let allFiles = [];
+// ナビゲーション履歴
+let folderStack = [{ id: 'root', name: 'マイドライブ' }];
+// 現在開いているファイルID
+let currentFileId = null;
+
+/* ---- GAPI load ---- */
+function gapiLoaded() {
+  gapi.load('client', initializeGapiClient);
+}
+async function initializeGapiClient() {
+  await gapi.client.init({ apiKey: API_KEY, discoveryDocs: [DISCOVERY_DOC] });
+  gapiInited = true;
+  maybeEnableLogin();
+}
+
+/* ---- GIS load ---- */
+function gisLoaded() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: async (resp) => {
+      if (resp.error) return;
+      accessToken = resp.access_token;
+      afterLogin();
+    },
+  });
+  gisInited = true;
+  maybeEnableLogin();
+}
+
+function maybeEnableLogin() {
+  if (gapiInited && gisInited) {
+    document.getElementById('btn-login').disabled = false;
+  }
+}
+
+function handleLogin() {
+  if (gapi.client.getToken() === null) {
+    tokenClient.requestAccessToken({ prompt: 'consent' });
+  } else {
+    tokenClient.requestAccessToken({ prompt: '' });
+  }
+}
+
+function handleLogout() {
+  const token = gapi.client.getToken();
+  if (token) {
+    google.accounts.oauth2.revoke(token.access_token);
+    gapi.client.setToken('');
+    accessToken = null;
+  }
+  document.getElementById('btn-login').style.display = '';
+  document.getElementById('btn-logout').style.display = 'none';
+  document.getElementById('user-info').textContent = '';
+  document.getElementById('file-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Googleでログインしてください</div>';
+  showWelcome();
+  allFiles = [];
+  folderStack = [{ id: 'root', name: 'マイドライブ' }];
+}
+
+async function afterLogin() {
+  document.getElementById('btn-login').style.display = 'none';
+  document.getElementById('btn-logout').style.display = '';
+  // ユーザー情報取得
+  try {
+    const resp = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    const info = await resp.json();
+    document.getElementById('user-info').textContent = info.email || '';
+  } catch(e) {}
+  // ファイル一覧を全取得（検索用）
+  loadAllFiles();
+  // ルートフォルダ表示
+  loadFolder('root');
+}
+
+/* ---- Drive API ---- */
+async function listFiles(folderId) {
+  const q = `'${folderId}' in parents and trashed=false and (mimeType='application/vnd.google-apps.folder' or name contains '.md')`;
+  let items = [], pageToken = null;
+  do {
+    const params = {
+      q, pageSize: 200, orderBy: 'folder,name',
+      fields: 'nextPageToken,files(id,name,mimeType,parents)',
+    };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = await gapi.client.drive.files.list(params);
+    items = items.concat(resp.result.files || []);
+    pageToken = resp.result.nextPageToken;
+  } while (pageToken);
+  return items;
+}
+
+async function loadAllFiles() {
+  // 全ての.mdファイルを取得（検索用）
+  let items = [], pageToken = null;
+  do {
+    const params = {
+      q: `trashed=false and name contains '.md' and mimeType != 'application/vnd.google-apps.folder'`,
+      pageSize: 1000,
+      fields: 'nextPageToken,files(id,name,parents)',
+    };
+    if (pageToken) params.pageToken = pageToken;
+    try {
+      const resp = await gapi.client.drive.files.list(params);
+      items = items.concat(resp.result.files || []);
+      pageToken = resp.result.nextPageToken;
+    } catch(e) { break; }
+  } while (pageToken);
+  allFiles = items;
+}
+
+async function loadFolder(folderId) {
+  showLoading();
+  try {
+    const files = await listFiles(folderId);
+    renderFileList(files, folderId);
+    showWelcome();
+  } catch(e) {
+    showError('フォルダの読み込みに失敗しました: ' + e.message);
+  }
+}
+
+function renderFileList(files, folderId) {
+  const el = document.getElementById('file-list');
+  const bc = document.getElementById('breadcrumb');
+  // breadcrumb
+  bc.textContent = '📁 ' + folderStack.map(f => f.name).join(' / ');
+
+  if (files.length === 0) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">ファイルがありません</div>';
+    return;
+  }
+
+  el.innerHTML = '';
+  // 上位フォルダへ
+  if (folderStack.length > 1) {
+    const back = document.createElement('div');
+    back.className = 'file-item folder';
+    back.innerHTML = '<span class="icon">⬆️</span><span class="name">..</span>';
+    back.onclick = () => {
+      folderStack.pop();
+      loadFolder(folderStack[folderStack.length - 1].id);
+      updateBackBtn();
+    };
+    el.appendChild(back);
+  }
+
+  files.forEach(f => {
+    const isFolder = f.mimeType === 'application/vnd.google-apps.folder';
+    const item = document.createElement('div');
+    item.className = 'file-item' + (isFolder ? ' folder' : '');
+    item.dataset.id = f.id;
+    item.innerHTML = `<span class="icon">${isFolder ? '📁' : '📄'}</span><span class="name">${escapeHtml(f.name.replace(/\.md$/, ''))}</span>`;
+    item.onclick = () => {
+      if (isFolder) {
+        folderStack.push({ id: f.id, name: f.name });
+        loadFolder(f.id);
+        updateBackBtn();
+      } else {
+        document.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        openFile(f.id, f.name);
+      }
+    };
+    el.appendChild(item);
+  });
+}
+
+async function openFile(fileId, fileName) {
+  currentFileId = fileId;
+  showLoading();
+  try {
+    const resp = await gapi.client.drive.files.get({
+      fileId, alt: 'media'
+    });
+    renderMarkdown(resp.body, fileName);
+  } catch(e) {
+    // gapi sometimes returns string directly
+    if (typeof resp !== 'undefined' && resp.body) {
+      renderMarkdown(resp.body, fileName);
+    } else {
+      showError('ファイルの読み込みに失敗しました: ' + e.message);
+    }
+  }
+}
+
+/* ---- Markdown rendering ---- */
+const CALLOUT_ICONS = {
+  note: '📝', info: 'ℹ️', tip: '💡', hint: '💡', important: '💡',
+  success: '✅', check: '✅', done: '✅',
+  warning: '⚠️', caution: '⚠️', attention: '⚠️',
+  danger: '🔥', error: '🔥', failure: '❌', fail: '❌', missing: '❌',
+  question: '❓', help: '❓', faq: '❓',
+  quote: '💬', cite: '💬',
+  abstract: '📋', summary: '📋', tldr: '📋',
+  todo: '☑️', bug: '🐛', example: '📖',
+};
+const CALLOUT_CLASSES = {
+  note:'note', info:'info', tip:'tip', hint:'tip', important:'tip',
+  success:'success', check:'success', done:'success',
+  warning:'warning', caution:'warning', attention:'warning',
+  danger:'danger', error:'danger', failure:'failure', fail:'failure', missing:'failure',
+  question:'question', help:'question', faq:'question',
+  quote:'quote', cite:'quote',
+  abstract:'abstract', summary:'abstract', tldr:'abstract',
+  todo:'todo', bug:'bug', example:'example',
+};
+
+function processCallouts(md) {
+  // Obsidian callout: > [!TYPE] Title\n> body
+  return md.replace(
+    /^(> \[!(\w+)\][^\n]*\n(?:>.*\n?)*)/gm,
+    (match) => {
+      const lines = match.split('\n');
+      const firstLine = lines[0];
+      const typeMatch = firstLine.match(/\[!(\w+)\](.*)/i);
+      if (!typeMatch) return match;
+      const type = typeMatch[1].toLowerCase();
+      const titleExtra = typeMatch[2].trim();
+      const cls = CALLOUT_CLASSES[type] || 'note';
+      const icon = CALLOUT_ICONS[type] || '📝';
+      const displayTitle = titleExtra || (type.charAt(0).toUpperCase() + type.slice(1));
+      const bodyLines = lines.slice(1).map(l => l.replace(/^> ?/, '')).join('\n').trim();
+      return `<div class="callout callout-${cls}"><div class="callout-title callout-${cls}-title"><span class="callout-icon">${icon}</span>${escapeHtml(displayTitle)}</div><div class="callout-body">${bodyLines}</div></div>\n`;
+    }
+  );
+}
+
+function processWikiLinks(html) {
+  return html.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => {
+    const display = label || target;
+    return `<a class="wiki-link" data-target="${escapeHtml(target)}" onclick="openWikiLink('${escapeHtml(target).replace(/'/g,"\\'")}')">[[${escapeHtml(display)}]]</a>`;
+  });
+}
+
+function processTags(html) {
+  // #タグ (スペースや句読点の前)
+  return html.replace(/(^|[\s(>])#([\w\u3000-\u9fff/-]+)/g, (_, before, tag) => {
+    return `${before}<a class="ob-tag" onclick="searchTag('${escapeHtml(tag)}')">#${escapeHtml(tag)}</a>`;
+  });
+}
+
+function renderMarkdown(text, fileName) {
+  // 1. Callouts (before marked, as raw HTML blocks)
+  let processed = processCallouts(text);
+
+  // 2. marked.js
+  marked.setOptions({
+    breaks: true,
+    gfm: true,
+    tables: true,
+  });
+  // custom renderer for task list
+  const renderer = new marked.Renderer();
+  renderer.listitem = (text, task, checked) => {
+    if (task) {
+      return `<li class="task-list-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled> ${text}</li>`;
+    }
+    return `<li>${text}</li>`;
+  };
+
+  let html = marked.parse(processed, { renderer });
+
+  // 3. WikiLinks
+  html = processWikiLinks(html);
+
+  // 4. Tags
+  html = processTags(html);
+
+  const el = document.getElementById('md-content');
+  el.innerHTML = html;
+  el.style.display = '';
+  document.getElementById('welcome').style.display = 'none';
+  document.getElementById('loading').style.display = 'none';
+
+  // Highlight code
+  el.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+
+  // Scroll to top
+  document.getElementById('content-area').scrollTop = 0;
+}
+
+async function openWikiLink(target) {
+  // allFiles から名前が一致するものを検索
+  const found = allFiles.find(f =>
+    f.name === target + '.md' || f.name === target
+  );
+  if (found) {
+    // サイドバーで該当ファイルをアクティブに
+    document.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'));
+    openFile(found.id, found.name);
+  } else {
+    alert(`"${target}" というノートが見つかりませんでした。`);
+  }
+}
+
+function searchTag(tag) {
+  document.getElementById('search-input').value = '#' + tag;
+  onSearchInput('#' + tag);
+}
+
+/* ---- Search ---- */
+let searchTimer = null;
+function onSearchInput(val) {
+  clearTimeout(searchTimer);
+  const resultsEl = document.getElementById('search-results');
+  if (!val || val.length < 1) {
+    resultsEl.style.display = 'none';
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    performSearch(val);
+  }, 300);
+}
+
+async function performSearch(query) {
+  const resultsEl = document.getElementById('search-results');
+  const isTag = query.startsWith('#');
+  const q = isTag ? query.slice(1).toLowerCase() : query.toLowerCase();
+
+  if (allFiles.length === 0) {
+    resultsEl.innerHTML = '<div class="search-result-item"><span class="sr-name">ログイン後に検索できます</span></div>';
+    resultsEl.style.display = '';
+    return;
+  }
+
+  const matches = allFiles.filter(f =>
+    f.name.toLowerCase().includes(q) ||
+    (isTag && f.name.toLowerCase().includes(q))
+  ).slice(0, 20);
+
+  if (matches.length === 0) {
+    resultsEl.innerHTML = '<div class="search-result-item"><span class="sr-name" style="color:var(--text-muted)">見つかりませんでした</span></div>';
+  } else {
+    resultsEl.innerHTML = matches.map(f => `
+      <div class="search-result-item" onclick="selectSearchResult('${f.id}','${escapeHtml(f.name).replace(/'/g,"\\'")}')">
+        <div class="sr-name">📄 ${escapeHtml(f.name.replace(/\.md$/,''))}</div>
+      </div>
+    `).join('');
+  }
+  resultsEl.style.display = '';
+}
+
+function selectSearchResult(id, name) {
+  document.getElementById('search-results').style.display = 'none';
+  document.getElementById('search-input').value = '';
+  openFile(id, name);
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#search-input') && !e.target.closest('#search-results')) {
+    document.getElementById('search-results').style.display = 'none';
+  }
+});
+
+/* ---- UI helpers ---- */
+function showLoading() {
+  document.getElementById('loading').style.display = 'flex';
+  document.getElementById('welcome').style.display = 'none';
+  document.getElementById('md-content').style.display = 'none';
+}
+function showWelcome() {
+  document.getElementById('loading').style.display = 'none';
+  if (document.getElementById('md-content').style.display === 'none') {
+    document.getElementById('welcome').style.display = 'flex';
+  }
+}
+function showError(msg) {
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('welcome').innerHTML = `<div class="logo">⚠️</div><h2>エラー</h2><p>${escapeHtml(msg)}</p>`;
+  document.getElementById('welcome').style.display = 'flex';
+  document.getElementById('md-content').style.display = 'none';
+}
+function updateBackBtn() {
+  document.getElementById('btn-back').style.display = folderStack.length > 1 ? '' : 'none';
+}
+function goBack() {
+  if (folderStack.length > 1) {
+    folderStack.pop();
+    loadFolder(folderStack[folderStack.length - 1].id);
+    updateBackBtn();
+  }
+}
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('overlay').classList.toggle('show');
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+
+<!-- Google API Scripts -->
+<script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+<script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+
+</body>
+</html>
