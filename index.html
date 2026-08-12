@@ -551,7 +551,12 @@ function gisLoaded() {
     client_id: CLIENT_ID,
     scope: SCOPES,
     callback: async (resp) => {
-      if (resp.error) return;
+      if (resp.error) {
+        // サイレント認証失敗 → フラグをクリアしてログインボタンを表示
+        localStorage.removeItem('obsidian_viewer_autologin');
+        document.getElementById('btn-login').disabled = false;
+        return;
+      }
       accessToken = resp.access_token;
       afterLogin();
     },
@@ -563,15 +568,16 @@ function gisLoaded() {
 function maybeEnableLogin() {
   if (gapiInited && gisInited) {
     document.getElementById('btn-login').disabled = false;
+    // 以前ログイン済みの場合は自動的にサイレント認証を試みる
+    if (localStorage.getItem('obsidian_viewer_autologin') === '1') {
+      tokenClient.requestAccessToken({ prompt: '' });
+    }
   }
 }
 
 function handleLogin() {
-  if (gapi.client.getToken() === null) {
-    tokenClient.requestAccessToken({ prompt: 'consent' });
-  } else {
-    tokenClient.requestAccessToken({ prompt: '' });
-  }
+  // select_account: アカウント選択画面のみ表示（毎回同意画面は不要）
+  tokenClient.requestAccessToken({ prompt: 'select_account' });
 }
 
 function handleLogout() {
@@ -581,6 +587,8 @@ function handleLogout() {
     gapi.client.setToken('');
     accessToken = null;
   }
+  // 自動ログインフラグをクリア
+  localStorage.removeItem('obsidian_viewer_autologin');
   document.getElementById('btn-login').style.display = '';
   document.getElementById('btn-logout').style.display = 'none';
   document.getElementById('user-info').textContent = '';
@@ -591,6 +599,8 @@ function handleLogout() {
 }
 
 async function afterLogin() {
+  // 次回起動時の自動ログインフラグを保存
+  localStorage.setItem('obsidian_viewer_autologin', '1');
   document.getElementById('btn-login').style.display = 'none';
   document.getElementById('btn-logout').style.display = '';
   // ユーザー情報取得
