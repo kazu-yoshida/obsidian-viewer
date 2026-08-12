@@ -770,13 +770,19 @@ function renderMarkdown(text, fileName) {
     gfm: true,
     tables: true,
   });
-  // custom renderer for task list
+  // custom renderer for task list and images
   const renderer = new marked.Renderer();
   renderer.listitem = (text, task, checked) => {
     if (task) {
       return `<li class="task-list-item"><input type="checkbox" ${checked ? 'checked' : ''} disabled> ${text}</li>`;
     }
     return `<li>${text}</li>`;
+  };
+  renderer.image = (href, title, text) => {
+    // URLデコードしてファイル名のみ取り出す
+    try { href = decodeURIComponent(href); } catch(e) {}
+    const filename = href.split('/').pop();
+    return `<span class="drive-image-loading" data-drive-img="${escapeHtml(filename)}">🖼️ ${escapeHtml(filename)} を読み込み中...</span>`;
   };
 
   let html = marked.parse(processed, { renderer });
@@ -807,9 +813,11 @@ async function loadDriveImages(el) {
   const placeholders = el.querySelectorAll('[data-drive-img]');
   for (const placeholder of placeholders) {
     const filename = placeholder.getAttribute('data-drive-img');
+    // パス付き（attachments/image.png）の場合はファイル名のみで照合
+    const basename = filename.split('/').pop();
     const found = allFiles.find(f =>
-      f.name === filename ||
-      f.name.toLowerCase() === filename.toLowerCase()
+      f.name === basename ||
+      f.name.toLowerCase() === basename.toLowerCase()
     );
     if (!found) {
       placeholder.textContent = `⚠️ 画像が見つかりません: ${filename}`;
