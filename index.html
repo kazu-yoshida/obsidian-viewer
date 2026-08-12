@@ -506,6 +506,35 @@ let folderStack = [{ id: 'root', name: 'マイドライブ' }];
 // 現在開いているファイルID
 let currentFileId = null;
 
+// デフォルトで開くフォルダパス（マイドライブからの相対パス）
+const DEFAULT_FOLDER_PATH = ['Obsidian Vault', 'OneNote'];
+
+// 自然順ソート（1, 2, 3, 3.1, 10 の順）
+function naturalCompare(a, b) {
+  return a.name.localeCompare(b.name, 'ja', { numeric: true, sensitivity: 'base' });
+}
+
+// デフォルトフォルダへ自動ナビゲート
+async function navigateToDefaultFolder() {
+  let currentId = 'root';
+  folderStack = [{ id: 'root', name: 'マイドライブ' }];
+  for (const folderName of DEFAULT_FOLDER_PATH) {
+    try {
+      const resp = await gapi.client.drive.files.list({
+        q: `'${currentId}' in parents and name = '${folderName.replace(/'/g,"\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed=false`,
+        fields: 'files(id,name)',
+        pageSize: 1,
+      });
+      const found = (resp.result.files || [])[0];
+      if (!found) break;
+      currentId = found.id;
+      folderStack.push({ id: currentId, name: found.name });
+    } catch(e) { break; }
+  }
+  loadFolder(currentId);
+  updateBackBtn();
+}
+
 /* ---- GAPI load ---- */
 function gapiLoaded() {
   gapi.load('client', initializeGapiClient);
@@ -574,8 +603,8 @@ async function afterLogin() {
   } catch(e) {}
   // ファイル一覧を全取得（検索用）
   loadAllFiles();
-  // ルートフォルダ表示
-  loadFolder('root');
+  // デフォルトフォルダへ移動
+  navigateToDefaultFolder();
 }
 
 /* ---- Drive API ---- */
@@ -584,7 +613,7 @@ async function listFiles(folderId) {
   let items = [], pageToken = null;
   do {
     const params = {
-      q, pageSize: 200, orderBy: 'folder,name',
+      q, pageSize: 200,
       fields: 'nextPageToken,files(id,name,mimeType,parents)',
     };
     if (pageToken) params.pageToken = pageToken;
@@ -592,7 +621,10 @@ async function listFiles(folderId) {
     items = items.concat(resp.result.files || []);
     pageToken = resp.result.nextPageToken;
   } while (pageToken);
-  return items;
+  // フォルダを先に、それぞれ自然順ソート
+  const folders = items.filter(f => f.mimeType === 'application/vnd.google-apps.folder').sort(naturalCompare);
+  const files   = items.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').sort(naturalCompare);
+  return [...folders, ...files];
 }
 
 async function loadAllFiles() {
