@@ -485,10 +485,12 @@
 <!-- ===== GOOGLE API ===== -->
 <script>
 // ==========================================
-// ⚙️ 設定: ここにGoogle Cloud のクライアントIDを入れる
+// ⚙️ 設定: 値はデプロイ時に GitHub Actions が
+// リポジトリシークレットから埋め込みます（.github/workflows/deploy.yml）。
+// ローカルで動かす場合はこの2行だけ一時的に実値に書き換えてください（コミットしないこと）。
 // ==========================================
-const CLIENT_ID = '455215896385-8ae1qtobhhcf7pmm1g968udpkigat6kl.apps.googleusercontent.com';
-const API_KEY   = 'AIzaSyBtnRIbNn-u6X2UagegrWNlL0to_zHxSxM';
+const CLIENT_ID = '__GOOGLE_CLIENT_ID__';
+const API_KEY   = '__GOOGLE_API_KEY__';
 // ==========================================
 
 const SCOPES = 'https://www.googleapis.com/auth/drive.readonly';
