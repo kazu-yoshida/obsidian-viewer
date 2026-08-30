@@ -29,8 +29,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           mkdir -p dist
-          cp -r . dist/
-          rm -rf dist/.github dist/dist
+          cp index.html dist/index.html
           sed -i "s|__GOOGLE_CLIENT_ID__|${GOOGLE_CLIENT_ID}|g" dist/index.html
           sed -i "s|__GOOGLE_API_KEY__|${GOOGLE_API_KEY}|g" dist/index.html
 
