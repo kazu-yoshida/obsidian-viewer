@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Obsidian Viewer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -48,6 +48,7 @@
     background: var(--bg-primary);
     color: var(--text-primary);
     height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -406,7 +407,7 @@
       transition: left 0.2s;
     }
     #sidebar.open { left: 0; }
-    #content-area { padding: 20px 16px; }
+    #content-area { padding: 20px 16px calc(40px + env(safe-area-inset-bottom, 0px)); }
     #btn-menu { display: flex !important; }
     #overlay {
       display: none;
