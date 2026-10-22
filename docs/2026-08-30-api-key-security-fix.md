@@ -7,7 +7,7 @@
 
 ```js
 const CLIENT_ID = '455215896385-8ae1qtobhhcf7pmm1g968udpkigat6kl.apps.googleusercontent.com';
-const API_KEY   = 'AIzaSyBtnRIbNn-u6X2UagegrWNlL0to_zHxSxM';
+const API_KEY   = 'AIzaSyBtnRIbNn-...（削除済み）';
 ```
 
 ## 対応内容
