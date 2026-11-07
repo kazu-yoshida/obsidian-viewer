@@ -71,9 +71,28 @@
     color: var(--accent);
     flex-shrink: 0;
   }
+  #search-box {
+    position: relative;
+    flex: 1;
+    min-width: 220px;
+    display: flex;
+    gap: 6px;
+  }
+  #search-scope {
+    max-width: 200px;
+    padding: 5px 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+  }
+  #search-scope:focus { border-color: var(--accent); }
   #search-input {
     flex: 1;
-    min-width: 150px;
+    min-width: 100px;
     padding: 5px 10px;
     background: var(--bg-primary);
     border: 1px solid var(--border);
@@ -377,15 +396,25 @@
   #search-results {
     display: none;
     position: absolute;
-    top: 48px; left: 0; right: 0;
+    top: calc(100% + 4px); left: 0; right: 0;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
-    border-radius: 0 0 8px 8px;
+    border-radius: 8px;
     z-index: 100;
-    max-height: 300px;
+    max-height: 60vh;
     overflow-y: auto;
     box-shadow: 0 8px 24px rgba(0,0,0,0.4);
   }
+  .search-status {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .search-result-item .sr-count { color: var(--text-muted); font-size: 11px; font-weight: normal; margin-left: 6px; }
+  .search-result-item mark { background: transparent; color: var(--accent-hover); font-weight: 600; font-style: normal; }
+  mark.search-hit { background: rgba(124,106,245,0.35); color: inherit; border-radius: 2px; }
+  mark.search-hit.current { background: var(--accent); color: #fff; }
   .search-result-item {
     padding: 10px 16px;
     cursor: pointer;
@@ -442,8 +471,11 @@
 <div id="topbar">
   <button id="btn-menu" onclick="toggleSidebar()">☰</button>
   <h1>📓 Obsidian Viewer</h1>
-  <div style="position:relative;flex:1;min-width:150px;">
-    <input id="search-input" type="text" placeholder="ノートを検索..." oninput="onSearchInput(this.value)" autocomplete="off">
+  <div id="search-box">
+    <select id="search-scope" onchange="onScopeChange(this.value)" title="検索範囲">
+      <option value="up0">📁 マイドライブ</option>
+    </select>
+    <input id="search-input" type="search" placeholder="検索..." oninput="onSearchInput(this.value)" onkeydown="onSearchKeydown(event)" onfocus="onSearchFocus()" autocomplete="off">
     <div id="search-results"></div>
   </div>
   <button id="btn-back" onclick="goBack()">← 戻る</button>
@@ -508,6 +540,16 @@ let allFiles = [];
 let folderStack = [{ id: 'root', name: 'マイドライブ' }];
 // 現在開いているファイルID
 let currentFileId = null;
+// 現在開いているファイルのフォルダ階層（ルート → 親フォルダ）
+let currentFileChain = null;
+
+// 検索範囲用: 全フォルダ (id → {id,name,parents})、子フォルダ一覧、マイドライブのルートID
+let folderMap = new Map();
+let folderChildren = new Map();
+let rootFolderId = null;
+let allFilesReady = Promise.resolve();
+// 本文キャッシュ (id → {modifiedTime, text})
+const contentCache = new Map();
 
 // デフォルトで開くフォルダパス（マイドライブからの相対パス）
 const DEFAULT_FOLDER_PATH = ['Obsidian Vault', 'OneNote'];
@@ -598,7 +640,14 @@ function handleLogout() {
   document.getElementById('file-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">Googleでログインしてください</div>';
   showWelcome();
   allFiles = [];
+  folderMap = new Map();
+  folderChildren = new Map();
+  rootFolderId = null;
+  contentCache.clear();
+  currentFileId = null;
+  currentFileChain = null;
   folderStack = [{ id: 'root', name: 'マイドライブ' }];
+  updateSearchScopes();
 }
 
 async function afterLogin() {
@@ -640,15 +689,10 @@ async function listFiles(folderId) {
   return [...folders, ...files];
 }
 
-async function loadAllFiles() {
-  // 全ての.mdファイルと画像ファイルを取得（検索・WikiLink・画像表示用）
+async function listAllByQuery(q, fields) {
   let items = [], pageToken = null;
   do {
-    const params = {
-      q: `trashed=false and (name contains '.md' or mimeType contains 'image/') and mimeType != 'application/vnd.google-apps.folder'`,
-      pageSize: 1000,
-      fields: 'nextPageToken,files(id,name,parents,mimeType)',
-    };
+    const params = { q, pageSize: 1000, fields };
     if (pageToken) params.pageToken = pageToken;
     try {
       const resp = await gapi.client.drive.files.list(params);
@@ -656,10 +700,97 @@ async function loadAllFiles() {
       pageToken = resp.result.nextPageToken;
     } catch(e) { break; }
   } while (pageToken);
-  allFiles = items;
+  return items;
+}
+
+function loadAllFiles() {
+  // 全ての.mdファイルと画像ファイル、全フォルダを取得（検索・WikiLink・画像表示用）
+  allFilesReady = (async () => {
+    const [root, files, folders] = await Promise.all([
+      gapi.client.drive.files.get({ fileId: 'root', fields: 'id' }).then(r => r.result.id, () => null),
+      listAllByQuery(
+        `trashed=false and (name contains '.md' or mimeType contains 'image/') and mimeType != 'application/vnd.google-apps.folder'`,
+        'nextPageToken,files(id,name,parents,mimeType,modifiedTime)'),
+      listAllByQuery(
+        `trashed=false and mimeType = 'application/vnd.google-apps.folder'`,
+        'nextPageToken,files(id,name,parents)'),
+    ]);
+    rootFolderId = root;
+    allFiles = files;
+    folderMap = new Map(folders.map(f => [f.id, f]));
+    folderChildren = new Map();
+    for (const f of folders) {
+      for (const p of f.parents || []) {
+        if (!folderChildren.has(p)) folderChildren.set(p, []);
+        folderChildren.get(p).push(f.id);
+      }
+    }
+    // 検索結果から開いたファイルの階層を、フォルダ一覧取得後に確定させる
+    if (currentFileId && !currentFileChain) {
+      const f = allFiles.find(x => x.id === currentFileId);
+      if (f) currentFileChain = getFolderChain((f.parents || [])[0]);
+    }
+    updateSearchScopes();
+  })();
+  return allFilesReady;
+}
+
+// フォルダIDからルートまでの階層を返す（ルート → 指定フォルダ）
+function getFolderChain(folderId) {
+  const chain = [];
+  const seen = new Set();
+  let id = folderId;
+  while (id && !seen.has(id)) {
+    seen.add(id);
+    if (id === 'root' || id === rootFolderId) {
+      chain.unshift({ id: 'root', name: 'マイドライブ' });
+      break;
+    }
+    const f = folderMap.get(id);
+    if (!f) break;
+    chain.unshift({ id: f.id, name: f.name });
+    id = (f.parents || [])[0];
+  }
+  return chain;
+}
+
+// 指定フォルダ以下（サブフォルダ含む）の.mdファイル
+function getMdFilesUnder(folderId) {
+  const isMd = f => /\.md$/i.test(f.name);
+  const start = folderId === 'root' ? rootFolderId : folderId;
+  if (!start) return allFiles.filter(isMd);
+  const set = new Set([start]);
+  const queue = [start];
+  while (queue.length) {
+    for (const child of folderChildren.get(queue.shift()) || []) {
+      if (!set.has(child)) { set.add(child); queue.push(child); }
+    }
+  }
+  return allFiles.filter(f => isMd(f) && (f.parents || []).some(p => set.has(p)));
+}
+
+async function getFileText(f) {
+  const cached = contentCache.get(f.id);
+  if (cached && cached.modifiedTime === f.modifiedTime) return cached.text;
+  try {
+    const resp = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!resp.ok) return '';
+    const text = await resp.text();
+    contentCache.set(f.id, { modifiedTime: f.modifiedTime, text });
+    return text;
+  } catch(e) {
+    return '';
+  }
 }
 
 async function loadFolder(folderId) {
+  // フォルダ移動時は開いているファイルを閉じる
+  currentFileId = null;
+  currentFileChain = null;
+  clearHighlights();
   showLoading();
   try {
     const files = await listFiles(folderId);
@@ -675,6 +806,7 @@ function renderFileList(files, folderId) {
   const bc = document.getElementById('breadcrumb');
   // breadcrumb
   bc.textContent = '📁 ' + folderStack.map(f => f.name).join(' / ');
+  updateSearchScopes();
 
   if (files.length === 0) {
     el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px;">ファイルがありません</div>';
@@ -709,21 +841,37 @@ function renderFileList(files, folderId) {
       } else {
         document.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
-        openFile(f.id, f.name);
+        openFile(f.id, f.name, { chain: folderStack.slice() });
       }
     };
     el.appendChild(item);
   });
 }
 
-async function openFile(fileId, fileName) {
+// options.chain: フォルダ階層（省略時はファイルの親フォルダから算出）
+// options.highlight: 開いた後にハイライトする検索語
+// options.keepScopeId: 検索範囲として維持するフォルダID
+async function openFile(fileId, fileName, options = {}) {
   currentFileId = fileId;
+  if (options.chain) {
+    currentFileChain = options.chain;
+  } else {
+    const f = allFiles.find(x => x.id === fileId);
+    const chain = f ? getFolderChain((f.parents || [])[0]) : [];
+    currentFileChain = chain.length ? chain : null;
+  }
+  updateSearchScopes(options.keepScopeId);
   showLoading();
   try {
     const resp = await gapi.client.drive.files.get({
       fileId, alt: 'media'
     });
+    if (currentFileId !== fileId) return;
     renderMarkdown(resp.body, fileName);
+    if (options.highlight) {
+      const marks = highlightInContent(options.highlight);
+      if (marks.length) focusHit(0);
+    }
   } catch(e) {
     // gapi sometimes returns string directly
     if (typeof resp !== 'undefined' && resp.body) {
@@ -908,54 +1056,298 @@ function searchTag(tag) {
 
 /* ---- Search ---- */
 let searchTimer = null;
-function onSearchInput(val) {
-  clearTimeout(searchTimer);
-  const resultsEl = document.getElementById('search-results');
-  if (!val || val.length < 1) {
-    resultsEl.style.display = 'none';
-    return;
-  }
-  searchTimer = setTimeout(() => {
-    performSearch(val);
-  }, 300);
+let searchGen = 0;               // 古い検索を打ち切るための世代番号
+let searchScopeKey = 'up0';      // ユーザーが選んだ範囲: 'file' または 'upN'（N階層上のフォルダ）
+let currentHits = [];            // ファイル内検索のハイライト要素
+const MAX_SEARCH_RESULTS = 100;
+const SEARCH_CONCURRENCY = 6;
+
+// 検索範囲の基準となるフォルダ階層（ファイルを開いていればその親、なければサイドバーのフォルダ）
+function getScopeChain() {
+  if (currentFileId && currentFileChain && currentFileChain.length) return currentFileChain;
+  return folderStack;
 }
 
-async function performSearch(query) {
-  const resultsEl = document.getElementById('search-results');
-  const isTag = query.startsWith('#');
-  const q = isTag ? query.slice(1).toLowerCase() : query.toLowerCase();
+// 検索範囲のプルダウンを再構築する
+// keepFolderId を指定すると、そのフォルダが階層内にあれば選択を維持する
+function updateSearchScopes(keepFolderId) {
+  const sel = document.getElementById('search-scope');
+  const chain = getScopeChain();
+  const opts = [];
+  if (currentFileId) opts.push({ value: 'file', label: '📄 このファイル' });
+  for (let i = chain.length - 1, up = 0; i >= 0; i--, up++) {
+    const prefix = up === 0 ? 'このフォルダ' : `${up}つ上`;
+    opts.push({ value: 'up' + up, label: `📁 ${prefix}: ${chain[i].name}`, id: chain[i].id });
+  }
+  sel.innerHTML = opts.map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('');
 
-  if (allFiles.length === 0) {
-    resultsEl.innerHTML = '<div class="search-result-item"><span class="sr-name">ログイン後に検索できます</span></div>';
-    resultsEl.style.display = '';
+  const kept = keepFolderId && opts.find(o => o.id === keepFolderId);
+  if (kept) {
+    searchScopeKey = kept.value;
+    sel.value = kept.value;
+  } else if (opts.some(o => o.value === searchScopeKey)) {
+    sel.value = searchScopeKey;
+  } else if (searchScopeKey === 'file') {
+    sel.value = 'up0';
+  } else {
+    sel.value = opts[opts.length - 1].value;
+  }
+}
+
+function onScopeChange(val) {
+  searchScopeKey = val;
+  const query = document.getElementById('search-input').value.trim();
+  if (query) performSearch(query);
+}
+
+function onSearchInput(val) {
+  clearTimeout(searchTimer);
+  if (!val.trim()) {
+    searchGen++;
+    document.getElementById('search-results').style.display = 'none';
+    clearHighlights();
     return;
   }
+  searchTimer = setTimeout(() => performSearch(val.trim()), 400);
+}
 
-  const matches = allFiles.filter(f =>
-    f.name.toLowerCase().includes(q) ||
-    (isTag && f.name.toLowerCase().includes(q))
-  ).slice(0, 20);
-
-  if (matches.length === 0) {
-    resultsEl.innerHTML = '<div class="search-result-item"><span class="sr-name" style="color:var(--text-muted)">見つかりませんでした</span></div>';
-  } else {
-    resultsEl.innerHTML = matches.map(f => `
-      <div class="search-result-item" onclick="selectSearchResult('${f.id}','${escapeHtml(f.name).replace(/'/g,"\\'")}')">
-        <div class="sr-name">📄 ${escapeHtml(f.name.replace(/\.md$/,''))}</div>
-      </div>
-    `).join('');
+function onSearchKeydown(e) {
+  if (e.key === 'Enter') {
+    clearTimeout(searchTimer);
+    const query = e.target.value.trim();
+    if (query) performSearch(query);
+  } else if (e.key === 'Escape') {
+    document.getElementById('search-results').style.display = 'none';
   }
+}
+
+function onSearchFocus() {
+  const resultsEl = document.getElementById('search-results');
+  if (document.getElementById('search-input').value.trim() && resultsEl.innerHTML) {
+    resultsEl.style.display = '';
+  }
+}
+
+function setSearchStatus(html) {
+  const resultsEl = document.getElementById('search-results');
+  resultsEl.innerHTML = `<div class="search-status">${html}</div>`;
   resultsEl.style.display = '';
 }
 
-function selectSearchResult(id, name) {
-  document.getElementById('search-results').style.display = 'none';
-  document.getElementById('search-input').value = '';
-  openFile(id, name);
+async function performSearch(query) {
+  const gen = ++searchGen;
+  const scope = document.getElementById('search-scope').value;
+
+  if (scope === 'file') {
+    searchInCurrentFile(query);
+    return;
+  }
+  clearHighlights();
+
+  if (!accessToken) {
+    setSearchStatus('ログイン後に検索できます');
+    return;
+  }
+  setSearchStatus('ファイル一覧を読み込み中...');
+  await allFilesReady;
+  if (gen !== searchGen) return;
+
+  const chain = getScopeChain();
+  const up = parseInt(scope.slice(2), 10) || 0;
+  const folder = chain[Math.max(0, chain.length - 1 - up)];
+  const targets = getMdFilesUnder(folder.id);
+  if (targets.length === 0) {
+    setSearchStatus(`「${escapeHtml(folder.name)}」内にノートがありません`);
+    return;
+  }
+
+  const q = query.toLowerCase();
+  const results = [];
+  let next = 0, done = 0;
+  setSearchStatus(`検索中... 0 / ${targets.length}`);
+  const worker = async () => {
+    while (next < targets.length) {
+      const f = targets[next++];
+      const text = await getFileText(f);
+      if (gen !== searchGen) return;
+      const r = matchFile(f, text, q);
+      if (r) results.push(r);
+      done++;
+      if (done < targets.length && done % 5 === 0) {
+        setSearchStatus(`検索中... ${done} / ${targets.length}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SEARCH_CONCURRENCY, targets.length) }, worker));
+  if (gen !== searchGen) return;
+
+  // ファイル名一致を優先し、次に本文のヒット数順
+  results.sort((a, b) =>
+    (b.nameHit - a.nameHit) || (b.count - a.count) || naturalCompare(a.file, b.file));
+  renderFolderResults(results, query, folder);
 }
 
+function matchFile(f, text, q) {
+  const nameHit = f.name.toLowerCase().includes(q) ? 1 : 0;
+  const lower = text.toLowerCase();
+  let count = 0, first = -1, pos = 0;
+  while ((pos = lower.indexOf(q, pos)) >= 0) {
+    if (first < 0) first = pos;
+    count++;
+    pos += q.length;
+  }
+  if (!nameHit && count === 0) return null;
+  return { file: f, nameHit, count, snippet: first >= 0 ? makeSnippet(text, first, q.length) : '' };
+}
+
+function makeSnippet(text, index, length) {
+  const start = Math.max(0, index - 30);
+  const end = Math.min(text.length, index + length + 60);
+  return (start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ') + (end < text.length ? '…' : '');
+}
+
+// 検索語を<mark>で囲んだHTMLを返す
+function markMatches(text, q) {
+  const lower = text.toLowerCase();
+  let out = '', pos = 0, i;
+  while ((i = lower.indexOf(q, pos)) >= 0) {
+    out += escapeHtml(text.slice(pos, i)) + '<mark>' + escapeHtml(text.slice(i, i + q.length)) + '</mark>';
+    pos = i + q.length;
+  }
+  return out + escapeHtml(text.slice(pos));
+}
+
+function renderFolderResults(results, query, folder) {
+  const resultsEl = document.getElementById('search-results');
+  const q = query.toLowerCase();
+  const scopeLabel = `「${escapeHtml(folder.name)}」内`;
+  if (results.length === 0) {
+    setSearchStatus(`${scopeLabel}で見つかりませんでした`);
+    return;
+  }
+  const shown = results.slice(0, MAX_SEARCH_RESULTS);
+  const more = results.length > shown.length ? `（上位${shown.length}件を表示）` : '';
+  resultsEl.innerHTML =
+    `<div class="search-status">${scopeLabel}: ${results.length}件${more}</div>` +
+    shown.map(r => {
+      const path = getFolderChain((r.file.parents || [])[0]).map(c => c.name).join(' / ');
+      const count = r.count ? `<span class="sr-count">${r.count}件</span>` : '';
+      return `
+      <div class="search-result-item" data-id="${escapeHtml(r.file.id)}" data-name="${escapeHtml(r.file.name)}">
+        <div class="sr-name">📄 ${markMatches(r.file.name.replace(/\.md$/i, ''), q)}${count}</div>
+        ${path ? `<div class="sr-path">${escapeHtml(path)}</div>` : ''}
+        ${r.snippet ? `<div class="sr-match">${markMatches(r.snippet, q)}</div>` : ''}
+      </div>`;
+    }).join('');
+  resultsEl.style.display = '';
+  resultsEl.dataset.query = query;
+  resultsEl.dataset.folderId = folder.id;
+}
+
+/* ---- ファイル内検索 ---- */
+function searchInCurrentFile(query) {
+  const el = document.getElementById('md-content');
+  clearHighlights();
+  if (!currentFileId || el.style.display === 'none') {
+    setSearchStatus('ファイルを開いてください');
+    return;
+  }
+  const marks = highlightInContent(query);
+  if (marks.length === 0) {
+    setSearchStatus('このファイル内で見つかりませんでした');
+    return;
+  }
+  const q = query.toLowerCase();
+  const blockSel = 'p,li,h1,h2,h3,h4,h5,h6,td,th,pre,blockquote,.callout-title';
+  const resultsEl = document.getElementById('search-results');
+  resultsEl.innerHTML =
+    `<div class="search-status">このファイル内: ${marks.length}件</div>` +
+    marks.slice(0, MAX_SEARCH_RESULTS).map((m, i) => {
+      // ヒット箇所を含むブロックの文章から前後を切り出す
+      const block = m.closest(blockSel) || el;
+      const range = document.createRange();
+      range.setStart(block, 0);
+      range.setEndBefore(m);
+      const offset = range.toString().length;
+      const snippet = makeSnippet(block.textContent, offset, q.length);
+      return `<div class="search-result-item" data-hit="${i}"><div class="sr-match">${markMatches(snippet, q)}</div></div>`;
+    }).join('');
+  resultsEl.style.display = '';
+  focusHit(0);
+}
+
+function highlightInContent(query) {
+  const el = document.getElementById('md-content');
+  const q = query.toLowerCase();
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const marks = [];
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    const lower = text.toLowerCase();
+    let i = lower.indexOf(q);
+    if (i < 0) continue;
+    const frag = document.createDocumentFragment();
+    let pos = 0;
+    while (i >= 0) {
+      frag.append(text.slice(pos, i));
+      const m = document.createElement('mark');
+      m.className = 'search-hit';
+      m.textContent = text.slice(i, i + q.length);
+      frag.append(m);
+      marks.push(m);
+      pos = i + q.length;
+      i = lower.indexOf(q, pos);
+    }
+    frag.append(text.slice(pos));
+    node.replaceWith(frag);
+  }
+  currentHits = marks;
+  return marks;
+}
+
+function clearHighlights() {
+  document.querySelectorAll('#md-content mark.search-hit').forEach(m => {
+    const parent = m.parentNode;
+    m.replaceWith(document.createTextNode(m.textContent));
+    parent.normalize();
+  });
+  currentHits = [];
+}
+
+function focusHit(index) {
+  const m = currentHits[index];
+  if (!m) return;
+  currentHits.forEach(h => h.classList.remove('current'));
+  m.classList.add('current');
+  // 折りたたまれたカラーアウト内なら展開する
+  let c = m.closest('.callout.collapsed');
+  while (c) {
+    c.classList.remove('collapsed');
+    c = c.parentElement && c.parentElement.closest('.callout.collapsed');
+  }
+  m.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+document.getElementById('search-results').addEventListener('click', e => {
+  const item = e.target.closest('.search-result-item');
+  if (!item) return;
+  const resultsEl = document.getElementById('search-results');
+  resultsEl.style.display = 'none';
+  if (item.dataset.hit !== undefined) {
+    focusHit(Number(item.dataset.hit));
+  } else if (item.dataset.id) {
+    document.querySelectorAll('.file-item').forEach(i => i.classList.remove('active'));
+    openFile(item.dataset.id, item.dataset.name, {
+      highlight: resultsEl.dataset.query,
+      keepScopeId: resultsEl.dataset.folderId,
+    });
+  }
+});
+
 document.addEventListener('click', e => {
-  if (!e.target.closest('#search-input') && !e.target.closest('#search-results')) {
+  if (!e.target.closest('#search-box')) {
     document.getElementById('search-results').style.display = 'none';
   }
 });
