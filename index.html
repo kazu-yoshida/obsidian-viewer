@@ -102,6 +102,18 @@
     outline: none;
   }
   #search-input:focus { border-color: var(--accent); }
+  #btn-search {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  #btn-search:hover { background: var(--accent-hover); }
 
   #btn-login, #btn-logout, #btn-back {
     padding: 5px 14px;
@@ -475,7 +487,8 @@
     <select id="search-scope" onchange="onScopeChange(this.value)" title="検索範囲">
       <option value="up0">📁 マイドライブ</option>
     </select>
-    <input id="search-input" type="search" placeholder="検索..." oninput="onSearchInput(this.value)" onkeydown="onSearchKeydown(event)" onfocus="onSearchFocus()" autocomplete="off">
+    <input id="search-input" type="search" enterkeyhint="search" placeholder="検索..." oninput="onSearchInput(this.value)" onkeydown="onSearchKeydown(event)" onfocus="onSearchFocus()" autocomplete="off">
+    <button id="btn-search" onclick="onSearchButton()" title="検索">🔍 検索</button>
     <div id="search-results"></div>
   </div>
   <button id="btn-back" onclick="goBack()">← 戻る</button>
@@ -1060,7 +1073,7 @@ let searchGen = 0;               // 古い検索を打ち切るための世代�
 let searchScopeKey = 'up0';      // ユーザーが選んだ範囲: 'file' または 'upN'（N階層上のフォルダ）
 let currentHits = [];            // ファイル内検索のハイライト要素
 const MAX_SEARCH_RESULTS = 100;
-const SEARCH_CONCURRENCY = 6;
+const SEARCH_CONCURRENCY = 12;
 
 // 検索範囲の基準となるフォルダ階層（ファイルを開いていればその親、なければサイドバーのフォルダ）
 function getScopeChain() {
@@ -1108,14 +1121,25 @@ function onSearchInput(val) {
     clearHighlights();
     return;
   }
-  searchTimer = setTimeout(() => performSearch(val.trim()), 400);
+  // フォルダ検索は重いので検索ボタン / Enter で実行。ファイル内検索のみ入力中に実行する
+  if (document.getElementById('search-scope').value === 'file') {
+    searchTimer = setTimeout(() => performSearch(val.trim()), 300);
+  }
+}
+
+function onSearchButton() {
+  clearTimeout(searchTimer);
+  const query = document.getElementById('search-input').value.trim();
+  if (query) performSearch(query);
+  else document.getElementById('search-input').focus();
 }
 
 function onSearchKeydown(e) {
+  // IME変換確定のEnterでは検索しない
+  if (e.isComposing || e.keyCode === 229) return;
   if (e.key === 'Enter') {
-    clearTimeout(searchTimer);
-    const query = e.target.value.trim();
-    if (query) performSearch(query);
+    e.preventDefault();
+    onSearchButton();
   } else if (e.key === 'Escape') {
     document.getElementById('search-results').style.display = 'none';
   }
@@ -1124,14 +1148,14 @@ function onSearchKeydown(e) {
 function onSearchFocus() {
   const resultsEl = document.getElementById('search-results');
   if (document.getElementById('search-input').value.trim() && resultsEl.innerHTML) {
-    resultsEl.style.display = '';
+    resultsEl.style.display = 'block';
   }
 }
 
 function setSearchStatus(html) {
   const resultsEl = document.getElementById('search-results');
   resultsEl.innerHTML = `<div class="search-status">${html}</div>`;
-  resultsEl.style.display = '';
+  resultsEl.style.display = 'block';
 }
 
 async function performSearch(query) {
@@ -1148,7 +1172,7 @@ async function performSearch(query) {
     setSearchStatus('ログイン後に検索できます');
     return;
   }
-  setSearchStatus('ファイル一覧を読み込み中...');
+  setSearchStatus('ファイル一覧を読み込み中...（初回は少し時間がかかります）');
   await allFilesReady;
   if (gen !== searchGen) return;
 
@@ -1162,29 +1186,91 @@ async function performSearch(query) {
   }
 
   const q = query.toLowerCase();
-  const results = [];
-  let next = 0, done = 0;
-  setSearchStatus(`検索中... 0 / ${targets.length}`);
+  const results = new Map();   // id → 結果（pending: 本文未確認）
+  const check = (f, text) => {
+    const r = matchFile(f, text, q);
+    if (r) results.set(f.id, r);
+    else results.delete(f.id);
+  };
+  const render = (progress) => {
+    // ファイル名一致を優先し、次に本文のヒット数順（未確認は後ろ）
+    const list = [...results.values()].sort((a, b) =>
+      (b.nameHit - a.nameHit) || (b.count - a.count) || naturalCompare(a.file, b.file));
+    renderFolderResults(list, query, folder, progress);
+  };
+
+  setSearchStatus('検索中...');
+
+  // 1) 高速検索: 取得済みの本文 + ファイル名一致 + Drive全文検索のヒットをすぐに表示
+  //    （Drive全文検索は単語単位のため部分一致を取りこぼすことがある → 2)で補完）
+  const driveHits = await driveFullTextSearch(query);
+  if (gen !== searchGen) return;
+  const quick = [], rest = [];
+  for (const f of targets) {
+    const cached = contentCache.get(f.id);
+    if (cached && cached.modifiedTime === f.modifiedTime) {
+      check(f, cached.text);
+    } else if (driveHits.has(f.id) || f.name.toLowerCase().includes(q)) {
+      results.set(f.id, { file: f, nameHit: f.name.toLowerCase().includes(q) ? 1 : 0, count: 0, snippet: '', pending: true });
+      quick.push(f);
+    } else {
+      rest.push(f);
+    }
+  }
+
+  // 2) 高速検索のヒット → 残りの順に本文を読み込み、確認しながら表示を更新する
+  const queue = [...quick, ...rest];
+  if (queue.length === 0) {
+    render(null);
+    return;
+  }
+  render(`全文を確認中... 0 / ${queue.length}`);
+  let done = 0, lastRender = performance.now();
+  await fetchAndCheck(queue, gen, (f, text) => {
+    check(f, text);
+    done++;
+    if (performance.now() - lastRender > 500) {
+      lastRender = performance.now();
+      render(`全文を確認中... ${done} / ${queue.length}`);
+    }
+  });
+  if (gen !== searchGen) return;
+  render(null);
+}
+
+// Drive APIの全文検索（マイドライブ全体）でヒットしたファイルIDの集合
+async function driveFullTextSearch(query) {
+  const ids = new Set();
+  const term = query.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  let pageToken = null, pages = 0;
+  try {
+    do {
+      const params = {
+        q: `trashed=false and name contains '.md' and fullText contains '${term}'`,
+        pageSize: 1000,
+        fields: 'nextPageToken,files(id)',
+      };
+      if (pageToken) params.pageToken = pageToken;
+      const resp = await gapi.client.drive.files.list(params);
+      (resp.result.files || []).forEach(f => ids.add(f.id));
+      pageToken = resp.result.nextPageToken;
+    } while (pageToken && ++pages < 10);
+  } catch(e) {}
+  return ids;
+}
+
+// 本文を並列で取得して onText(f, text) を呼ぶ。新しい検索が始まったら打ち切る
+async function fetchAndCheck(files, gen, onText) {
+  let next = 0;
   const worker = async () => {
-    while (next < targets.length) {
-      const f = targets[next++];
+    while (next < files.length) {
+      const f = files[next++];
       const text = await getFileText(f);
       if (gen !== searchGen) return;
-      const r = matchFile(f, text, q);
-      if (r) results.push(r);
-      done++;
-      if (done < targets.length && done % 5 === 0) {
-        setSearchStatus(`検索中... ${done} / ${targets.length}`);
-      }
+      onText(f, text);
     }
   };
-  await Promise.all(Array.from({ length: Math.min(SEARCH_CONCURRENCY, targets.length) }, worker));
-  if (gen !== searchGen) return;
-
-  // ファイル名一致を優先し、次に本文のヒット数順
-  results.sort((a, b) =>
-    (b.nameHit - a.nameHit) || (b.count - a.count) || naturalCompare(a.file, b.file));
-  renderFolderResults(results, query, folder);
+  await Promise.all(Array.from({ length: Math.min(SEARCH_CONCURRENCY, files.length) }, worker));
 }
 
 function matchFile(f, text, q) {
@@ -1217,18 +1303,24 @@ function markMatches(text, q) {
   return out + escapeHtml(text.slice(pos));
 }
 
-function renderFolderResults(results, query, folder) {
+// progress: 全件確認中ならその進捗テキスト、完了なら null
+function renderFolderResults(results, query, folder, progress) {
   const resultsEl = document.getElementById('search-results');
   const q = query.toLowerCase();
   const scopeLabel = `「${escapeHtml(folder.name)}」内`;
+  const progressHtml = progress ? `<br>⏳ ${escapeHtml(progress)}` : '';
+  resultsEl.dataset.query = query;
+  resultsEl.dataset.folderId = folder.id;
+  // 表示/非表示はここでは変えない（閉じている間も裏で更新だけする）
   if (results.length === 0) {
-    setSearchStatus(`${scopeLabel}で見つかりませんでした`);
+    resultsEl.innerHTML = `<div class="search-status">${progress ? `検索中...${progressHtml}` : `${scopeLabel}で見つかりませんでした`}</div>`;
     return;
   }
   const shown = results.slice(0, MAX_SEARCH_RESULTS);
   const more = results.length > shown.length ? `（上位${shown.length}件を表示）` : '';
+  const scrollTop = resultsEl.scrollTop;
   resultsEl.innerHTML =
-    `<div class="search-status">${scopeLabel}: ${results.length}件${more}</div>` +
+    `<div class="search-status">${scopeLabel}: ${results.length}件${more}${progressHtml}</div>` +
     shown.map(r => {
       const path = getFolderChain((r.file.parents || [])[0]).map(c => c.name).join(' / ');
       const count = r.count ? `<span class="sr-count">${r.count}件</span>` : '';
@@ -1236,12 +1328,11 @@ function renderFolderResults(results, query, folder) {
       <div class="search-result-item" data-id="${escapeHtml(r.file.id)}" data-name="${escapeHtml(r.file.name)}">
         <div class="sr-name">📄 ${markMatches(r.file.name.replace(/\.md$/i, ''), q)}${count}</div>
         ${path ? `<div class="sr-path">${escapeHtml(path)}</div>` : ''}
-        ${r.snippet ? `<div class="sr-match">${markMatches(r.snippet, q)}</div>` : ''}
+        ${r.snippet ? `<div class="sr-match">${markMatches(r.snippet, q)}</div>`
+          : r.pending ? '<div class="sr-match">本文を確認中...</div>' : ''}
       </div>`;
     }).join('');
-  resultsEl.style.display = '';
-  resultsEl.dataset.query = query;
-  resultsEl.dataset.folderId = folder.id;
+  resultsEl.scrollTop = scrollTop;
 }
 
 /* ---- ファイル内検索 ---- */
@@ -1272,7 +1363,7 @@ function searchInCurrentFile(query) {
       const snippet = makeSnippet(block.textContent, offset, q.length);
       return `<div class="search-result-item" data-hit="${i}"><div class="sr-match">${markMatches(snippet, q)}</div></div>`;
     }).join('');
-  resultsEl.style.display = '';
+  resultsEl.style.display = 'block';
   focusHit(0);
 }
 
